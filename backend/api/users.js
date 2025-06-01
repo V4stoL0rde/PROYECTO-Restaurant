@@ -13,6 +13,9 @@ router.post('/autenticate',UserController2.autUser2);
 router.post('/nuevo',UserController2.verifyUser2);
 router.post('/recuperate',UserController2.RecuperarCuenta);
 router.post('/recuperate2',UserController2.RecuperarCuentaCodigo);
+router.put('/editusuarios/:id',UserController2.actualizarUsuario);
+router.get('/obtenerUser/:id', UserController2.obtenerUsuarioPorId);
+router.delete('/usuarios/:id', UserController2.eliminarUsuarioConPassword);
 
 
 

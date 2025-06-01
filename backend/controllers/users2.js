@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const User2 = require("../models/User2");
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
+const bcrypt = require('bcrypt');
 
 
 // Función para enviar correo electrónico
@@ -11,13 +12,13 @@ const sendEmail = (email, subject, message) => {
    port:465,
    secure:true,
     auth: {
-      user: 'restaurante.ulagos@gmail.com', // Reemplaza con tu correo electrónico de Gmail
-      pass: 'tacy uycg eszo tdjj' // Reemplaza con tu contraseña de Gmail
+      user: 'restaurante.ulagos@gmail.com',
+      pass: 'tacy uycg eszo tdjj' 
     }
   });
 
   const mailOptions = {
-    from: 'restaurante.ulagos@gmail.com', // Reemplaza con tu correo electrónico de Gmail
+    from: 'restaurante.ulagos@gmail.com', 
     to: email,
     subject: subject,
     text: message
@@ -46,31 +47,36 @@ const addUser2 = (req, res) => {
     role:req.body.role
   });
 
-  user2.save((err, user) => {
+  user2.save((err, user) => { 
     if (err) {
-      res.status(500).send(err.message);
+      return res.status(500).send({ message: 'No se pudo enviar el correo, compruebe los datos.' });
     } else {
-      // Envía correo electrónico al nuevo usuario con el código
+      try {
 
-      if (user.role[0] === 'CLIENTE') {
-        sendEmail(user.correo, 'Código de verificación para registrarse', `Tu código de verificación es ${code}. Úsalo para completar tu registro en nuestra aplicación.`);
-      }
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/; // Expresión regular básica para validar correos
 
-      else {
-        if(user.role[0] === 'TRABAJADOR'){
-        sendEmail(user.correo, 'Código de verificación para registrarse', `hable con el administrador para obtener su codigo de verificacion.`);
-        sendEmail(email, 'Código de verificación para registrarse', `código de verificación es ${code}.`);
-
-      }
-      } 
-      
-      
-      const date = new Date();
-      date.setHours(date.getHours() - 4);
-      userVerificationCodes[req.body.Username] = { code: code, sentTime: date ,failedAttempts: 0 };
+        if (!emailRegex.test(user.correo)) {
+          return res.status(400).send({ message: 'Correo electrónico no válido.' });
+        }
+        
+        // Envía correo electrónico al nuevo usuario con el código
+        if (user.role[0] === 'CLIENTE') {
+          sendEmail(user.correo, 'Código de verificación para registrarse', `Tu código de verificación es ${code}. Úsalo para completar tu registro en nuestra aplicación.`);
+        } else if (user.role[0] === 'TRABAJADOR') {
+          sendEmail(user.correo, 'Código de verificación para registrarse', `Hable con el administrador para obtener su código de verificación.`);
+          sendEmail(email, 'Código de verificación para registrarse', `Código de verificación es ${code}.`);
+        }
   
-      res.status(200).json(user);
-      
+        const date = new Date();
+        date.setHours(date.getHours() - 4);
+        userVerificationCodes[req.body.Username] = { code: code, sentTime: date, failedAttempts: 0 };
+  
+        res.status(200).json(user);
+  
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: 'Error interno.' });
+      }
     }
   });
   
@@ -80,49 +86,59 @@ const verifyUser2 = (req, res) => {
   const code = req.body.code;
   const username = req.body.Username;
   const date = new Date();
-  date.setHours(date.getHours() - 4); // Ajuste de zona horaria
-  
+  date.setHours(date.getHours() - 4);
+
+
+    if (!username || typeof username !== "string") {
+    return res.status(400).json({ message: 'Nombre de usuario no válido.' });
+  }
+
+  if (!userCodeData) {
+    return res.status(404).json({ message: 'Usuario no encontrado o sin código generado.' });
+  }
+
+  if (!code) {
+    return res.status(400).json({ message: 'Código de verificación no proporcionado.' });
+  }
+
   if (!userVerificationCodes[username]) {
-    return res.status(404).json({ message: 'Usuario no encontrado' });
+    return res.status(404).json({ message: 'Usuario no encontrado ' + userVerificationCodes[username] });
+  }
+
+  if (!code) {
+    return res.status(400).json({ message: 'Código de verificación no proporcionado.' });
   }
 
   const { code: sentCode, sentTime } = userVerificationCodes[username];
 
-  // Convierte sentCode a string porque llega como objeto
-  const sentCodeString = sentCode.toString();
-  const codeString = code.toString(); // Asegura que code sea una cadena
-
-  // Verifica si el código enviado coincide con el original y si no ha pasado demasiado tiempo
-  if (sentCodeString === codeString && (date - sentTime) <= 600000) {
-    // Verificación exitosa, actualizar el usuario como verificado
+  if (!sentCode) {
+    return res.status(500).json({ message: 'Error interno: Código de verificación no disponible.' });
+  }
+//compara los codigos y ve que no se pase del tiempo 
+  if (String(sentCode) === String(code) && (date - sentTime) <= 600000) {
     User2.findOneAndUpdate({ Username: username }, { verified: true }, { new: true }, (err, user) => {
       if (err) {
-        return res.status(500).send(err.message);
+        res.status(500).send(err.message);
       } else {
-        return res.status(200).json(user);
+        res.status(200).json(user);
       }
     });
   } else {
     console.log('code:', code, 'sentCode:', sentCode);
 
-    // Incrementa el contador de intentos fallidos
-    userVerificationCodes[username].failedAttempts = (userVerificationCodes[username].failedAttempts || 0) + 1;
-
-    // Si el número de intentos fallidos es mayor  3, eliminar usuario
-    if (userVerificationCodes[username].failedAttempts > 3) {
-      // Eliminar al usuario de la base de datos
+    userVerificationCodes[username].failedAttempts++;
+    if (userVerificationCodes[username].failedAttempts >= 2) {
+      //si se terminan sus intentos borrara al usuario 
       User2.deleteOne({ Username: username }, (err) => {
         if (err) {
-          return res.status(500).send(err.message);
+          res.status(500).send(err.message);
         } else {
-          // Eliminar los intentos fallidos del objeto en memoria
           delete userVerificationCodes[username];
-          return res.status(200).json({ message: 'Usuario eliminado correctamente debido a intentos fallidos de verificación.' });
+          res.status(200).json({ message: 'Usuario eliminado correctamente' });
         }
       });
     } else {
-      // Notificar al usuario que el código es incorrecto
-      res.status(401).json({ message: 'Código de verificación inválido. Intentos fallidos: ' + userVerificationCodes[username].failedAttempts });
+      res.status(401).json({ message: 'Código de verificación inválido o ha expirado. Por favor, inténtalo de nuevo.' });
     }
   }
 };
@@ -184,38 +200,150 @@ const RecuperarCuenta = (req, res) => {
 const RecuperarCuentaCodigo = (req, res) => {
   const code = req.body.code;
   const Username = req.body.Username;
+  const pass = req.body.password;
+
+const body= req.body;
+console.log(body)
+
+  console.log("Código guardado:", userVerificationCodes[Username].code);
+  console.log("codigo enviado", req.body.code)
+
+  
 
   if (!userVerificationCodes[Username] || toString(userVerificationCodes[Username].code) !== toString(code)) {
     return res.status(401).json({ message: 'Código de verificación inválido' });
   }
 
-  User2.findOneAndUpdate({Username: Username}, {password: req.body.password}, {new: true})
+
+  if (!userVerificationCodes[Username] || toString(userVerificationCodes[Username].code) === toString(code)) {
+    User2.findOne({ Username })
   .then((user) => {
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
-    // Elimina el código de verificación del usuario
+    // Asigna la nueva contraseña
+    user.password = pass;
+
+    // Elimina el código de verificación después
     delete userVerificationCodes[Username];
 
-    return res.status(200).json({ message: 'Contraseña actualizada exitosamente' });
+    // Guarda el usuario, esto activará el pre('save')
+    return user.save().then(() => {
+      res.status(200).json({ message: 'Contraseña actualizada exitosamente' });
+    });
   })
-  .catch((error) => {
-    console.log(error);
-    return res.status(500).json({ message: 'Error al actualizar la contraseña' });
+  .catch((err) => {
+    console.error(err);
+    res.status(500).json({ message: 'Error al actualizar la contraseña' });
   });
+  }
+  
+
+
 };
 
-/* GET users listing. */
+
+
+const actualizarUsuario = async (req, res) => {
+
+    const { id } = req.params;
+       console.log("ID recibido2:", id);
+
+  
+  const { username, correo, nuevaPassword, passwordActual } = req.body;
+
+  try {
+    const user = await User2.findById(id);
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    // Verifica la contraseña actual
+    const passwordCorrecta = await bcrypt.compare(passwordActual, user.password);
+    if (!passwordCorrecta) return res.status(400).json({ error: 'Contraseña actual incorrecta' });
+
+    // Actualiza datos opcionalmente
+    if (username) user.Username = username;
+    if (correo) user.correo = correo;
+
+    // Si se quiere cambiar la contraseña, solo asigna
+    if (nuevaPassword) {
+      user.password = nuevaPassword; // será cifrada automáticamente por el pre('save')
+    }
+
+    await user.save(); // Esto ejecuta el pre('save') si la contraseña cambió
+
+    res.json({ mensaje: 'Usuario actualizado correctamente' });
+  } catch (error) {
+    console.error('Error actualizando usuario:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+
+const eliminarUsuarioConPassword = async (req, res) => {
+  const { id } = req.params;
+  const { password } = req.body;
+
+  try {
+    const user = await User2.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+
+    // Verificar la contraseña proporcionada
+    const passwordCorrecta = await bcrypt.compare(password, user.password);
+    if (!passwordCorrecta) {
+      return res.status(401).json({ message: 'Contraseña incorrecta' });
+    }
+
+    // Eliminar usuario si la contraseña es válida
+    await User2.findByIdAndDelete(id);
+    res.status(200).json({ message: 'Usuario eliminado correctamente' });
+
+  } catch (error) {
+    console.error('Error al eliminar el usuario:', error);
+    res.status(500).json({ message: 'Error al eliminar el usuario' });
+  }
+};
+
+
+
+const obtenerUsuarioPorId = async (req, res) => {
+
+  
+ 
+  try {
+
+     const { id } = req.params;
+       console.log("ID recibido:", id);
+    
+    const user = await User2.findById(req.params.id).select('-password -token'); // Oculta contraseña y token
+
+   
+
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+       
+    }
+    res.status(200).json(user);
+  } catch (error) {
+    res.status(500).json({ message: 'Error al obtener el usuario' });
+  }
+};
+
+/* GET users listing. */ 
 const verUser2 = (req, res, next) => {
   res.send('respond with a resource');
 };
 
 module.exports = {
+  obtenerUsuarioPorId,
   addUser2,
   autUser2,
   verUser2,
   verifyUser2,
   RecuperarCuenta,
-  RecuperarCuentaCodigo
+  RecuperarCuentaCodigo,
+  actualizarUsuario,
+  eliminarUsuarioConPassword,
 };

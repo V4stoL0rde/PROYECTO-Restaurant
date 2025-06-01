@@ -8,6 +8,15 @@ const mongoose = require('mongoose');
 
 const Users= require("./api/users");
 const User2 = require("./models/User2");
+const Reserva = require('./models/reserva'); 
+const Pedidos = require("./api/pedidos");
+const TransbankRoutes = require("./api/transbank");
+const reservas = require("./api/reservas");
+const Menu = require("./api/menu")
+const mesas = require("./api/mesas");
+const pagosRoutes = require('./api/pagos');
+
+
 
 var app = express();
 
@@ -46,7 +55,50 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 //rutas
 app.use('/api/users', Users);
-
-
+app.use('/api/menu', Menu);
+app.use('/api/pedidos', Pedidos);
+app.use('/api/transbank', TransbankRoutes);
+app.use('/api/reserva',reservas);
+app.use('/api/mesas', mesas);
+app.use('/api/pagos', pagosRoutes);
 
 module.exports = app;
+
+
+
+const cron = require('node-cron');
+
+
+//Ejecutar en el minuto 0 de cada hora 01:00, 02:00
+
+cron.schedule('0 * * * *', async () => {
+  try {
+    const ahora = new Date();
+
+    // 1. Poner como EXPIRADAS las reservas pendientes cuyo tiempo ya pasó
+    const expiradas = await Reserva.updateMany(
+      {
+        estado: 'pendiente',
+        fecha_fin: { $lt: ahora }
+      },
+      { $set: { estado: 'expirada' } }
+    );
+
+    // 2. Poner como COMPLETADAS las reservas confirmadas cuyo tiempo ya pasó
+    const completadas = await Reserva.updateMany(
+      {
+        estado: 'confirmada',
+        fecha_fin: { $lt: ahora }
+      },
+      { $set: { estado: 'completada' } }
+    );
+
+    if (expiradas.modifiedCount > 0 || completadas.modifiedCount > 0) {
+      console.log(` Actualización automática:
+      - ${expiradas.modifiedCount} reservas expiradas
+      - ${completadas.modifiedCount} reservas completadas`);
+    }
+  } catch (error) {
+    console.error('Error al actualizar estados de reservas automáticamente:', error);
+  }
+});
